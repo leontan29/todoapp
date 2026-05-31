@@ -1,0 +1,5 @@
+python-fasthtml
+PyMySQL
+redis
+passlib[bcrypt]
+python-dotenv

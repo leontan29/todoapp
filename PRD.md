@@ -2,75 +2,93 @@
 
 ## Overview
 
-TodoApp is a single-page web application that allows a user to manage a personal task list. It supports adding, deleting, and completing tasks, with filtering by status and automatic persistence across page reloads. The project is designed as a learning exercise covering DOM manipulation, browser events, localStorage, and basic CRUD operations.
+TodoApp is a multi-user web application that allows registered users to manage their personal task lists. It supports registration, login, and per-user todo management (add, delete, complete, filter). Built with FastHTML (Python + HTMX), MySQL, and Redis.
 
 ---
 
 ## Goals
 
-- Provide a clean, functional task list a user can manage entirely in the browser.
-- Persist tasks across sessions without a server or database.
-- Serve as a self-contained teaching project for front-end fundamentals.
+- Allow many users to register and manage their own private todo lists.
+- Persist tasks server-side in MySQL, scoped to the authenticated user.
+- Use Redis as a session store to manage authenticated state.
+- Serve as a learning project for production Python web app architecture.
 
 ## Non-Goals
 
-- User accounts, authentication, or any server-side logic.
-- Multi-user or collaborative task lists.
-- Backend API or database.
-- Mobile app or framework-based implementation (React, Vue, etc.).
-- Real-time sync or offline-first PWA features.
+- Social login (OAuth, Google, GitHub).
+- Shared or collaborative task lists.
+- Admin panel or cross-user visibility.
+- Mobile app or JS framework (React, Vue, etc.).
+- Real-time sync or WebSockets.
+- Due dates, priorities, tags, or subtasks.
 
 ---
 
 ## Users
 
-A single user type: **anonymous user** (no login required).
+One user type: **registered user**.
 
 | Action | Authenticated? |
 |---|---|
-| View task list | No |
-| Add a task | No |
-| Delete a task | No |
-| Mark a task complete / incomplete | No |
-| Filter tasks by status | No |
+| Register | No |
+| Log in | No |
+| View own task list | Yes |
+| Add a task | Yes |
+| Delete a task | Yes |
+| Mark a task complete / incomplete | Yes |
+| Filter tasks by status | Yes |
+| Log out | Yes |
 
 ---
 
 ## Functional Requirements
 
+### Registration
+
+- User submits email + password via `/register`.
+- Email must be unique; duplicate returns an error message.
+- Password is hashed with bcrypt before storage (never stored in plaintext).
+- On success, session is created and user is redirected to `/todos`.
+
+### Login
+
+- User submits email + password via `/login`.
+- Invalid credentials return a generic error (no user enumeration).
+- On success, session is created and user is redirected to `/todos`.
+
+### Logout
+
+- POST to `/logout` clears the Redis session and cookie.
+- User is redirected to `/login`.
+
+### Session Management
+
+- Sessions are stored in Redis as a JSON dict keyed by a UUID cookie.
+- Sessions expire after 30 minutes of inactivity (TTL refreshed on each request).
+- Any request to a protected route without a valid session redirects to `/login`.
+
 ### Add Task
 
-- User types text into an input field and submits (button click or Enter key).
-- Input must not be empty or whitespace-only; submission is ignored if so.
-- A new task is appended to the list and saved to localStorage immediately.
-- The input field is cleared after a successful add.
+- User types text and submits. Empty/whitespace-only input is rejected.
+- Task is saved to MySQL linked to the authenticated user.
+- Page updates via HTMX partial — no full reload.
 
 ### Delete Task
 
-- Each task has a delete button visible on hover or at all times.
-- Clicking delete removes the task from the list and from localStorage.
-- No confirmation dialog is required.
+- Clicking delete removes the task from MySQL.
+- Only the owning user can delete their own tasks (enforced server-side).
+- Page updates via HTMX partial.
 
 ### Toggle Complete
 
-- Each task has a checkbox or click target that marks it complete or incomplete.
-- Completed tasks are visually distinguished (e.g., strikethrough text, muted color).
-- State change is persisted to localStorage immediately.
+- Checkbox toggles `completed` boolean in MySQL.
+- Completed tasks are visually distinguished (strikethrough).
+- Page updates via HTMX partial.
 
 ### Filter Tasks
 
-- Three filter options are available: **All**, **Active**, **Completed**.
-- **All** shows every task regardless of status.
-- **Active** shows only tasks where `completed` is `false`.
-- **Completed** shows only tasks where `completed` is `true`.
-- The active filter persists across page reloads (stored in localStorage).
-- The task count displayed reflects the current filter.
-
-### Persistence
-
-- All tasks are stored in `localStorage` under a single key (`tasks`).
-- On page load, tasks are read from localStorage and rendered into the DOM.
-- Any mutation (add, delete, toggle) writes the full updated array back to localStorage.
+- Three filters: **All**, **Active**, **Completed** (query param `?filter=`).
+- Filter state is preserved in the URL, not localStorage.
 
 ---
 
@@ -78,24 +96,34 @@ A single user type: **anonymous user** (no login required).
 
 | Concern | Requirement |
 |---|---|
-| Persistence | All data stored client-side in `localStorage`; no network requests. |
-| Compatibility | Must work in modern evergreen browsers (Chrome, Firefox, Safari, Edge). |
-| Accessibility | Task items use semantic HTML; checkbox inputs have associated labels. |
-| Performance | All operations (add, delete, toggle, filter) must feel instantaneous — no async required. |
-| Dependencies | Zero external libraries or build tools; plain HTML/CSS/JS only. |
+| Auth security | Passwords hashed with bcrypt; sessions use random UUIDs |
+| Data isolation | All queries filter by authenticated `user_id` |
+| Session expiry | 30-minute Redis TTL, refreshed per request |
+| Config | Connection details via `.env` file (never hardcoded) |
+| Schema | Managed via plain `schema.sql`, run once on setup |
 
 ---
 
-## Data Model Summary
+## Data Model
 
-Tasks are stored in `localStorage` as a JSON-serialized array under the key `"tasks"`. Each task is a plain object:
+### `users`
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | string | Unique identifier (e.g., `Date.now().toString()`) |
-| `text` | string | The task description entered by the user |
-| `completed` | boolean | Whether the task has been marked done |
-| `createdAt` | string | ISO 8601 timestamp of when the task was added |
+| `id` | INT PK | Auto-increment |
+| `email` | VARCHAR(255) UNIQUE | Login identifier |
+| `password_hash` | VARCHAR(255) | bcrypt hash |
+| `created_at` | TIMESTAMP | Account creation time |
+
+### `todos`
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | INT PK | Auto-increment |
+| `user_id` | INT FK → users.id | Owner |
+| `text` | VARCHAR(500) | Task description |
+| `completed` | BOOLEAN | Completion state |
+| `created_at` | TIMESTAMP | Creation time |
 
 ---
 
@@ -103,10 +131,13 @@ Tasks are stored in `localStorage` as a JSON-serialized array under the key `"ta
 
 | Component | Technology |
 |---|---|
-| Markup | HTML5 |
-| Styles | CSS3 |
-| Logic | Vanilla JavaScript (ES6+) |
-| Persistence | Browser `localStorage` API |
+| Language | Python 3 |
+| Web framework | FastHTML |
+| Frontend interactivity | HTMX (via FastHTML) |
+| Database | MySQL (PyMySQL driver) |
+| Session store | Redis |
+| Password hashing | passlib[bcrypt] |
+| Config | python-dotenv |
 
 ---
 
@@ -114,19 +145,12 @@ Tasks are stored in `localStorage` as a JSON-serialized array under the key `"ta
 
 ```
 todoapp/
-├── index.html   # App shell and static markup
-├── style.css    # All visual styles
-└── app.js       # All application logic (task state, DOM updates, events)
+├── schema.sql        # DB initialization
+├── .env              # Local config (gitignored)
+├── .env.example      # Config template
+├── requirements.txt
+├── session.py        # Redis session layer
+├── db.py             # MySQL connection helpers
+├── auth.py           # Password hash/verify
+└── app.py            # Routes and app entry point
 ```
-
----
-
-## Out of Scope (Future Considerations)
-
-- User accounts or login.
-- Server-side storage or API.
-- Due dates, priorities, or task categories.
-- Subtasks or nested lists.
-- Drag-and-drop reordering.
-- Bulk actions (delete all completed, check all).
-- Search or text filtering within the task list.
